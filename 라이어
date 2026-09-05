@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>라이어 게임 (온라인)</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --text: #f8fafc;
+      --text-sub: #94a3b8;
+      --danger: #ef4444;
+      --accent: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 16px; }
+    .container { width: 100%; max-width: 400px; background: var(--card-bg); border-radius: 20px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); text-align: center; }
+    h1 { font-size: 1.4rem; margin-bottom: 20px; font-weight: 700; color: #fff; }
+    .screen { display: none; flex-direction: column; gap: 14px; }
+    .screen.active { display: flex; }
+    .form-group { text-align: left; }
+    label { display: block; font-size: 0.85rem; color: var(--text-sub); margin-bottom: 6px; }
+    input, select { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 1rem; outline: none; }
+    button { width: 100%; padding: 14px; border-radius: 12px; border: none; font-size: 1rem; font-weight: 600; cursor: pointer; transition: 0.2s; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-sub { background: #334155; color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .card-box { background: #0f172a; border-radius: 14px; padding: 28px 16px; margin: 10px 0; border: 2px dashed #334155; }
+    .player-pill { background: #0f172a; padding: 10px; border-radius: 8px; margin: 4px 0; text-align: left; font-size: 0.95rem; border: 1px solid #334155; }
+    .word-text { font-size: 2rem; font-weight: 800; color: var(--accent); margin-top: 8px; word-break: keep-all; }
+    .liar-text { font-size: 1.8rem; font-weight: 800; color: var(--danger); margin-top: 8px; }
+  </style>
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, update, get } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-database.js";
+
+    // 1. 본인의 Firebase 프로젝트 설정값으로 교체하세요
+    const firebaseConfig = {
+  apiKey: "AIzaSyANPcthJSrtya0LI96wqljyarbn-WcH6PI",
+  authDomain: "fkdldj-cde8f.firebaseapp.com",
+  projectId: "fkdldj-cde8f",
+  storageBucket: "fkdldj-cde8f.firebasestorage.app",
+  messagingSenderId: "885912823295",
+  appId: "1:885912823295:web:0bb562a2fcee6bc0d4f3ca",
+  measurementId: "G-22TVW2FL4Q"
+};
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const WORDS = {
+      "음식": ["떡볶이", "초밥", "삼겹살", "짜장면", "피자", "치킨", "마라탕", "라면"],
+      "장소": ["놀이공원", "노래방", "공항", "영화관", "도서관", "PC방", "캠핑장"],
+      "사물": ["스마트폰", "무선이어폰", "신용카드", "우산", "전자레인지", "선풍기"]
+    };
+
+    let currentRoomCode = "";
+    let myPlayerId = "";
+    let isHost = false;
+
+    window.switchScreen = (id) => {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+    };
+
+    window.createRoom = async () => {
+      const name = document.getElementById('player-name').value.trim();
+      if (!name) return alert("닉네임을 입력하세요.");
+      
+      currentRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+      myPlayerId = "p_" + Date.now();
+      isHost = true;
+
+      const roomRef = ref(db, `rooms/${currentRoomCode}`);
+      await set(roomRef, {
+        state: "WAITING",
+        hostId: myPlayerId,
+        players: {
+          [myPlayerId]: { name: name }
+        }
+      });
+
+      listenRoom();
+    };
+
+    window.joinRoom = async () => {
+      const name = document.getElementById('player-name').value.trim();
+      const code = document.getElementById('room-code').value.trim().toUpperCase();
+      if (!name || !code) return alert("닉네임과 방 코드를 입력하세요.");
+
+      const roomSnapshot = await get(ref(db, `rooms/${code}`));
+      if (!roomSnapshot.exists()) return alert("존재하지 않는 방입니다.");
+
+      currentRoomCode = code;
+      myPlayerId = "p_" + Date.now();
+      isHost = false;
+
+      await set(ref(db, `rooms/${code}/players/${myPlayerId}`), { name: name });
+      listenRoom();
+    };
+
+    function listenRoom() {
+      switchScreen('lobby-screen');
+      document.getElementById('display-room-code').innerText = currentRoomCode;
+
+      onValue(ref(db, `rooms/${currentRoomCode}`), (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        // 참가자 목록 갱신
+        const playerList = Object.entries(data.players || {}).map(([id, p]) => 
+          `<div class="player-pill">👤 ${p.name} ${id === data.hostId ? '(방장)' : ''}</div>`
+        ).join('');
+        document.getElementById('lobby-players').innerHTML = playerList;
+
+        const pCount = Object.keys(data.players || {}).length;
+        document.getElementById('player-count-text').innerText = `${pCount}명 대기 중`;
+
+        // 방장에게만 시작 버튼 활성화
+        if (isHost) {
+          document.getElementById('host-controls').style.display = 'block';
+        }
+
+        // 게임 시작 감지
+        if (data.state === "PLAYING") {
+          renderGameScreen(data);
+        } else if (data.state === "WAITING") {
+          switchScreen('lobby-screen');
+        }
+      });
+    }
+
+    window.startGame = async () => {
+      const roomSnapshot = await get(ref(db, `rooms/${currentRoomCode}`));
+      const data = roomSnapshot.val();
+      const playerIds = Object.keys(data.players);
+
+      if (playerIds.length < 3) {
+        return alert("최소 3명이 모여야 게임을 시작할 수 있습니다.");
+      }
+
+      // 무작위 라이어 1명 선정
+      const liarIndex = Math.floor(Math.random() * playerIds.length);
+      const liarId = playerIds[liarIndex];
+
+      // 무작위 카테고리 & 단어
+      const categories = Object.keys(WORDS);
+      const category = categories[Math.floor(Math.random() * categories.length)];
+      const wordList = WORDS[category];
+      const word = wordList[Math.floor(Math.random() * wordList.length)];
+
+      await update(ref(db, `rooms/${currentRoomCode}`), {
+        state: "PLAYING",
+        category: category,
+        word: word,
+        liarId: liarId
+      });
+    };
+
+    function renderGameScreen(data) {
+      document.getElementById('game-category').innerText = data.category;
+      const roleBox = document.getElementById('my-role-display');
+
+      if (data.liarId === myPlayerId) {
+        roleBox.innerHTML = `
+          <div style="color: var(--text-sub);">당신의 역할</div>
+          <div class="liar-text">당신은 라이어입니다!</div>
+          <p style="font-size: 0.85rem; color: var(--text-sub); margin-top: 10px;">
+            카테고리 힌트를 보고 정체를 들키지 않게 설명하세요.
+          </p>
+        `;
+      } else {
+        roleBox.innerHTML = `
+          <div style="color: var(--text-sub);">당신의 제시어</div>
+          <div class="word-text">${data.word}</div>
+          <p style="font-size: 0.85rem; color: var(--text-sub); margin-top: 10px;">
+            라이어가 눈치채지 못하게 둘러대며 설명하세요.
+          </p>
+        `;
+      }
+
+      if (isHost) {
+        document.getElementById('host-end-btn').style.display = 'block';
+      }
+      switchScreen('game-screen');
+    }
+
+    window.endGame = async () => {
+      const roomSnapshot = await get(ref(db, `rooms/${currentRoomCode}`));
+      const data = roomSnapshot.val();
+      const liarName = data.players[data.liarId]?.name || "알 수 없음";
+
+      alert(`게임 종료!\n제시어: ${data.word}\n라이어: ${liarName}`);
+
+      await update(ref(db, `rooms/${currentRoomCode}`), {
+        state: "WAITING"
+      });
+    };
+  </script>
+</head>
+<body>
+
+<div class="container">
+  <!-- 진입 화면 -->
+  <div id="join-screen" class="screen active">
+    <h1>🎭 라이어 게임</h1>
+    <div class="form-group">
+      <label>내 이름 (닉네임)</label>
+      <input type="text" id="player-name" placeholder="이름 입력">
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 8px;">
+      <button class="btn-primary" onclick="createRoom()">방 만들기</button>
+    </div>
+    <hr style="border: 0; border-top: 1px solid #334155; margin: 12px 0;">
+    <div class="form-group">
+      <label>방 코드</label>
+      <input type="text" id="room-code" placeholder="코드 4자리 입력">
+    </div>
+    <button class="btn-sub" onclick="joinRoom()">코드로 방 입장</button>
+  </div>
+
+  <!-- 대기실 화면 -->
+  <div id="lobby-screen" class="screen">
+    <div style="font-size: 0.85rem; color: var(--text-sub);">입장 코드 공유</div>
+    <h1 id="display-room-code" style="font-size: 2.2rem; letter-spacing: 4px; color: var(--accent);">----</h1>
+    <div style="text-align: left; font-size: 0.85rem; color: var(--text-sub);" id="player-count-text">0명 대기 중</div>
+    <div id="lobby-players"></div>
+    <div id="host-controls" style="display: none; margin-top: 10px;">
+      <button class="btn-primary" onclick="startGame()">모두 모임 (게임 시작)</button>
+    </div>
+  </div>
+
+  <!-- 게임 화면 (각자 폰에서 확인) -->
+  <div id="game-screen" class="screen">
+    <h1>게임 진행 중</h1>
+    <div style="font-size: 0.9rem; color: var(--text-sub);">
+      카테고리: <strong id="game-category" style="color: #fff;">-</strong>
+    </div>
+    <div class="card-box" id="my-role-display"></div>
+    <div id="host-end-btn" style="display: none;">
+      <button class="btn-danger" onclick="endGame()">결과 공개 및 대기실 복귀</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
